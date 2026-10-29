@@ -100,6 +100,7 @@ endif()
 # =============================================================================
 
 set(FAISS_SRC
+  IndexPEPS.cpp
   AutoTune.cpp
   Clustering.cpp
   SuperKMeans.cpp
@@ -239,6 +240,7 @@ if(FAISS_ENABLE_SVS)
 endif()
 
 set(FAISS_HEADERS
+  IndexPEPS.h
   AutoTune.h
   Clustering.h
   SuperKMeans.h

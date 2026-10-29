@@ -29,6 +29,9 @@ namespace faiss {
  * HNSW structure implementation
  **************************************************************/
 
+
+
+
 int HNSW::nb_neighbors(int layer_no) const {
     FAISS_THROW_IF_NOT(
             static_cast<size_t>(layer_no + 1) < cum_nneighbor_per_level.size());
@@ -1755,7 +1758,9 @@ HNSWStats search_impl(
         const IndexHNSW* index,
         ResultHandler& res,
         VisitedTable& vt,
-        const SearchParameters* params) {
+        const SearchParameters* params,
+        const float* v // [peps] the vector we search on 
+        ) {
     HNSWStats stats;
     if (hnsw.entry_point == -1) {
         return stats;
@@ -1772,11 +1777,18 @@ HNSWStats search_impl(
         }
     }
 
+
     //  greedy search on upper levels
     storage_idx_t nearest = hnsw.entry_point;
-    float d_nearest = qdis(nearest);
 
-    for (int level = hnsw.max_level; level >= 1; level--) {
+    // [peps]
+    if(hnsw.ep_selector) {
+        nearest = (*hnsw.ep_selector)(v);
+    }
+
+    float d_nearest = qdis(nearest);
+    
+    for (int level = hnsw.levels[nearest] - 1; level >= 1; level--) {
         HNSWStats local_stats = greedy_update_nearest_impl<C>(
                 hnsw, qdis, level, nearest, d_nearest);
         stats.combine(local_stats);
@@ -1976,11 +1988,14 @@ HNSWStats HNSW::search(
         const IndexHNSW* index,
         ResultHandler& res,
         VisitedTable& vt,
-        const SearchParameters* params) const {
+        const SearchParameters* params,
+        // [peps]
+        const float* v
+    ) const {
     if (is_similarity) {
-        return search_impl<C_similarity>(*this, qdis, index, res, vt, params);
+        return search_impl<C_similarity>(*this, qdis, index, res, vt, params, v);
     }
-    return search_impl<C_distance>(*this, qdis, index, res, vt, params);
+    return search_impl<C_distance>(*this, qdis, index, res, vt, params, v);
 }
 
 void HNSW::search_level_0(

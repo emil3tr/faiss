@@ -126,6 +126,7 @@ typedef uint64_t size_t;
 #include <faiss/impl/hnsw/MinimaxHeap.h>
 #include <faiss/impl/HNSW.h>
 #include <faiss/IndexHNSW.h>
+#include <faiss/IndexPEPS.h>
 
 #include <faiss/impl/kmeans1d.h>
 
@@ -618,6 +619,7 @@ void gpu_sync_all_devices()
 %include  <faiss/impl/hnsw/MinimaxHeap.h>
 %include  <faiss/impl/HNSW.h>
 %include  <faiss/IndexHNSW.h>
+%include  <faiss/IndexPEPS.h>
 
 %include <faiss/impl/kmeans1d.h>
 
@@ -922,6 +924,7 @@ typedef int cudaDataType_t;
     DOWNCAST ( MultiIndexQuantizer )
     DOWNCAST ( IndexHNSWFlatPanorama )
     DOWNCAST ( IndexHNSWFlat )
+    DOWNCAST ( IndexPEPS )
     DOWNCAST ( IndexHNSWPQ )
     DOWNCAST ( IndexHNSWSQ )
     DOWNCAST ( IndexHNSWCagra )

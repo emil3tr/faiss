@@ -479,7 +479,10 @@ void hnsw_search(
                     // reusable-table acquisition above only clears stale TLS
                     // state before this thread starts processing queries.
                     HNSWStats stats =
-                            hnsw.search(*dis, index, *res, *vt, params);
+                            hnsw.search(*dis, index, *res, *vt, params,
+                            // [peps]
+                                x + i* index->d
+                            );
                     n1 += stats.n1;
                     n2 += stats.n2;
                     ndis += stats.ndis;

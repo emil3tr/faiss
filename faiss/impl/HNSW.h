@@ -24,6 +24,11 @@
 
 namespace faiss {
 
+// [peps]
+struct EntryPointSelector {
+        virtual int32_t operator()(const float* v) const = 0; 
+};
+
 // Forward declarations to avoid circular dependency.
 struct IndexHNSW;
 struct IndexHNSWFlatPanorama;
@@ -109,6 +114,9 @@ struct HNSW {
     // existing call sites that mention `HNSW::NodeDist*` keep working.
     using NodeDistCloser = NodeDistCloserT<C_distance>;
     using NodeDistFarther = NodeDistFartherT<C_distance>;
+
+    // [peps]
+    EntryPointSelector* ep_selector = nullptr;
 
     /// assignment probability to each layer (sum=1)
     std::vector<double> assign_probas;
@@ -246,7 +254,9 @@ struct HNSW {
             const IndexHNSW* index,
             ResultHandler& res,
             VisitedTable& vt,
-            const SearchParameters* params = nullptr) const;
+            const SearchParameters* params = nullptr,
+            const float* v = nullptr // [peps] the vector we search on 
+        ) const;
 
     /// search only in level 0 from a given vertex
     void search_level_0(
