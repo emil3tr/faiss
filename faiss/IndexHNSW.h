@@ -37,6 +37,14 @@ struct IndexHNSW : Index {
     void bstats_enable();
     void bstats_disable();
 
+        // peps will only select points as start points with low <= level[point] <= high
+        // if high < low will not do anything
+        void peps_set_lvl_bounds(int low, int high);
+
+        // retuns the max level 1 indexed
+        int get_max_level();
+        
+        void peps_set_use_boundary(float b);
 
     // the link structure
     HNSW hnsw;

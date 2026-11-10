@@ -95,7 +95,7 @@ void EntryPointSelector::add(const float* x, int n, int32_t id0) {
         fill_peps_distances_squared(x + d * i, distances, d);
         for (int j = 0; j < 2 * d; j++) {
             if (distances[j] < entry_point_distances[j] &&
-                /*hnsw->levels[id0 + i] >= 3*/ true) {
+                hnsw->levels[id0 + i] >= hnsw->peps_ep_lvl_low && hnsw->levels[id0+i] <= hnsw->peps_ep_lvl_high) {
                 entry_point_ids[j] = id0 + i;
                 entry_point_distances[j] = distances[j];
             }

@@ -62,6 +62,20 @@ void IndexHNSW::bstats_disable() {
     hnsw.bstats_enabled = false;
 }
 
+void IndexHNSW::peps_set_lvl_bounds(int low, int high) {
+    if(low > high) return;
+    hnsw.peps_ep_lvl_low = low;
+    hnsw.peps_ep_lvl_high = high;
+}
+
+int IndexHNSW::get_max_level() {
+    return hnsw.max_level + 1;
+}
+
+void IndexHNSW::peps_set_use_boundary(float b) {
+    hnsw.peps_use_boundary = b;
+} // namespace faiss
+
 }
 
 namespace faiss {

@@ -107,9 +107,12 @@ struct HNSW {
         mutable std::vector<int> bstats_nhops_bot;
         mutable std::vector<float> bstats_dis_pep;
         mutable std::vector<float> bstats_dis_ep;
+
+        int peps_ep_lvl_low = 1;
+        int peps_ep_lvl_high = 100;
+        float peps_use_boundary = 100.0; // use peps if distance to ep is smaller than only
+
         
-
-
 
     /// internal storage of vectors (32 bits: this is expensive)
     using storage_idx_t = int32_t;
