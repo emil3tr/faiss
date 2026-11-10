@@ -30,6 +30,14 @@ struct IndexHNSW;
 struct IndexHNSW : Index {
     using storage_idx_t = HNSW::storage_idx_t;
 
+    // [peps]
+    void peps_init(); // enable and init peps, once inited will always add new vectors to peps
+    void peps_enable(); // entry point is peps ep
+    void peps_disable(); // choose entry point normally
+    void bstats_enable();
+    void bstats_disable();
+
+
     // the link structure
     HNSW hnsw;
 

@@ -24,10 +24,35 @@
 
 namespace faiss {
 
+struct HNSW;
+
 // [peps]
 struct EntryPointSelector {
-        virtual int32_t operator()(const float* v) const = 0; 
+   private:
+    int d = 0;
+    HNSW* hnsw;
+    std::vector<int32_t> entry_point_ids;
+    std::vector<float> entry_point_distances;
+public:
+        EntryPointSelector(int d, HNSW* hsnw);
+        EntryPointSelector();
+        int32_t get_ep(const float* v, int& i) const;
+        int get_elvl(int32_t ep_id) const;
+        void add(const float* x, int n, int32_t id0);
+        ~EntryPointSelector() {}
 };
+
+// [peps]
+struct AdvancedStats {
+        int n_hops_down{0}; // number of hops in the upper layers
+        int n_hops_bottom{0}; // number of hops in the bottom layer
+        int n_distances_computed{0}; // number of distance computations
+        float distance_to_peps_ep{-1.0}; // distance to the peps entry point chosen
+        float distance_to_ep{-1.0}; // distance to the real entry point chosen
+        std::vector<int> level_at_hop{}; // level at hop i
+        std::vector<float> distance_at_hop{}; // distance to query at hop i
+};
+
 
 // Forward declarations to avoid circular dependency.
 struct IndexHNSW;
@@ -66,6 +91,26 @@ struct SearchParametersHNSW : SearchParameters {
 };
 
 struct HNSW {
+
+        /**
+         * [peps]
+         * For simple testing we guarantee that if ep_selection_enabled, ep_selector and current_query
+         * are well-inited and if advanced_stats_enabled we cann fill advanced_stats up to its size.
+         */
+        EntryPointSelector ep_selector; 
+        bool peps_inited = false; // peps was inited and all associated vals are valid
+        bool peps_enabled = false; // peps is currently enabled
+
+        bool bstats_enabled = false;
+        // for simplicity we guarantee that these always have the same size
+        mutable std::vector<int> bstats_nhops_down;
+        mutable std::vector<int> bstats_nhops_bot;
+        mutable std::vector<float> bstats_dis_pep;
+        mutable std::vector<float> bstats_dis_ep;
+        
+
+
+
     /// internal storage of vectors (32 bits: this is expensive)
     using storage_idx_t = int32_t;
 
@@ -114,9 +159,6 @@ struct HNSW {
     // existing call sites that mention `HNSW::NodeDist*` keep working.
     using NodeDistCloser = NodeDistCloserT<C_distance>;
     using NodeDistFarther = NodeDistFartherT<C_distance>;
-
-    // [peps]
-    EntryPointSelector* ep_selector = nullptr;
 
     /// assignment probability to each layer (sum=1)
     std::vector<double> assign_probas;
@@ -255,7 +297,8 @@ struct HNSW {
             ResultHandler& res,
             VisitedTable& vt,
             const SearchParameters* params = nullptr,
-            const float* v = nullptr // [peps] the vector we search on 
+            // [peps]
+                int32_t qid = -1, const float* v = nullptr
         ) const;
 
     /// search only in level 0 from a given vertex

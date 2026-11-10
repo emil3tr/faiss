@@ -37,6 +37,33 @@
 #include <faiss/utils/sorting.h>
 #include <faiss/utils/utils.h>
 
+// [peps]
+namespace faiss {
+
+void IndexHNSW::peps_init() {
+    hnsw.ep_selector = EntryPointSelector(d, &hnsw);
+    hnsw.peps_inited = true;
+    hnsw.peps_enabled = true;
+}
+
+void IndexHNSW::peps_enable() {
+    hnsw.peps_enabled = true;
+}
+
+void IndexHNSW::peps_disable() {
+    hnsw.peps_enabled = false;
+}
+
+void IndexHNSW::bstats_enable() {
+    hnsw.bstats_enabled = true;
+}
+
+void IndexHNSW::bstats_disable() {
+    hnsw.bstats_enabled = false;
+}
+
+}
+
 namespace faiss {
 
 using storage_idx_t = HNSW::storage_idx_t;
@@ -479,9 +506,9 @@ void hnsw_search(
                     // reusable-table acquisition above only clears stale TLS
                     // state before this thread starts processing queries.
                     HNSWStats stats =
-                            hnsw.search(*dis, index, *res, *vt, params,
+                            hnsw.search(*dis, index, *res, *vt, params, 
                             // [peps]
-                                x + i* index->d
+                               i, (x + i*(index->d))
                             );
                     n1 += stats.n1;
                     n2 += stats.n2;
@@ -517,6 +544,14 @@ void IndexHNSW::search(
         idx_t* labels,
         const SearchParameters* params) const {
     FAISS_THROW_IF_NOT(k > 0);
+
+    // [peps]
+    if(hnsw.bstats_enabled) {
+        hnsw.bstats_dis_pep.resize(n);
+        hnsw.bstats_dis_ep.resize(n);
+        hnsw.bstats_nhops_bot.resize(n);
+        hnsw.bstats_nhops_down.resize(n);
+    }
 
     if (is_similarity_metric(this->metric_type)) {
         using RH = HeapBlockResultHandler<HNSW::C_similarity>;
@@ -583,6 +618,11 @@ void IndexHNSW::add(idx_t n, const float* x) {
             [this, x, n0](DistanceComputer& dc, HNSW::storage_idx_t pt_id) {
                 dc.set_query(x + (pt_id - n0) * d);
             });
+
+    // [peps]
+    if(hnsw.peps_inited) {
+        hnsw.ep_selector.add(x, n, n0);
+    }
 }
 
 void IndexHNSW::reset() {
