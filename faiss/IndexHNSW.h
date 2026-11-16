@@ -28,23 +28,14 @@ struct IndexHNSW;
  * link structure built on top */
 
 struct IndexHNSW : Index {
+    /**
+     * [peps]
+     * This must be set to true before doing anything else if peps should be
+     * used
+     */
+    bool IS_PEPS = false;
+
     using storage_idx_t = HNSW::storage_idx_t;
-
-    // [peps]
-    void peps_init(); // enable and init peps, once inited will always add new vectors to peps
-    void peps_enable(); // entry point is peps ep
-    void peps_disable(); // choose entry point normally
-    void bstats_enable();
-    void bstats_disable();
-
-        // peps will only select points as start points with low <= level[point] <= high
-        // if high < low will not do anything
-        void peps_set_lvl_bounds(int low, int high);
-
-        // retuns the max level 1 indexed
-        int get_max_level();
-        
-        void peps_set_use_boundary(float b);
 
     // the link structure
     HNSW hnsw;
@@ -151,6 +142,13 @@ struct IndexHNSW : Index {
 struct IndexHNSWFlat : IndexHNSW {
     IndexHNSWFlat();
     IndexHNSWFlat(int d, int M, MetricType metric = METRIC_L2);
+};
+
+// [peps]
+struct IndexHNSWPeps : IndexHNSWFlat {
+    IndexHNSWPeps(int d, int M) : IndexHNSWFlat(d, M) {
+        IS_PEPS = true;
+    }
 };
 
 /** Panorama implementation of IndexHNSWFlat following

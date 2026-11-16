@@ -24,9 +24,6 @@
 #include <faiss/impl/hnsw/MinimaxHeap.h>
 
 // [peps]
-#include <limits>
-
-// [peps]
 namespace {
 
 /**
@@ -49,19 +46,28 @@ void fill_peps_distances_squared(const float* vec, float* res, int d) {
     }
 }
 
-
-int get_vec_max_abs_ind(const float* v, int d) {
-    float largest = 0.0;
-    int index = 0;
+/**
+ * Calculates the n largest abs. value indices of v (size d) and puts them in
+ * ret_arr. Expects that size(ret_arr) <= d and then guarantees that all are
+ * valid indices.
+ */
+void get_vec_max_abs_ind(const float* v, int d, int32_t* ret_arr, int n) {
+    using fip = std::pair<float, int32_t>;
+    std::priority_queue<fip, std::vector<fip>, std::greater<fip>> pq{};
 
     for (int i = 0; i < d; i++) {
-        if (std::abs(v[i]) > largest) {
-            largest = std::abs(v[i]);
-            index = i;
+        if (pq.size() < n) {
+            pq.push(std::make_pair(std::abs(v[i]), i));
+        } else if (std::abs(v[i]) > pq.top().first) {
+            pq.pop();
+            pq.push(std::make_pair(std::abs(v[i]), i));
         }
     }
 
-    return index;
+    for (int i = 0; i < n; i++) {
+        ret_arr[i] = pq.top().second;
+        pq.pop();
+    }
 }
 
 } // namespace
@@ -69,35 +75,30 @@ int get_vec_max_abs_ind(const float* v, int d) {
 // [peps]
 namespace faiss {
 
-EntryPointSelector::EntryPointSelector(int d, HNSW* hnsw)
-        : d{d},
-          hnsw{hnsw},
-          entry_point_ids(2 * d, -1),
-          entry_point_distances(2 * d, std::numeric_limits<float>::max()) {}
+void HNSW::peps_init(const float* x, int d, int n, int32_t id0) {
+    if (!peps_inited) {
+        peps_d = d;
+        peps_nlvls = max_level + 1;
+        peps_ep_ids = std::vector<int32_t>(peps_d * 2 * peps_nlvls, -1);
+        peps_ep_dis = std::vector<float>(peps_d * 2 * peps_nlvls, 0.0);
+        peps_lvl_bounds = std::vector<float>(peps_nlvls, 100.0);
+        peps_inited =
+                true;
+    }
 
-int32_t EntryPointSelector::get_ep(const float* v, int& mi) const {
-    int max_i = get_vec_max_abs_ind(v, d);
-    int peps_i = max_i * 2 + (v[max_i] < 0 ? 1 : 0); 
-    int32_t candidate = entry_point_ids.at(peps_i);
-    mi = max_i;
-    if (candidate == -1)
-        candidate = hnsw->entry_point;
-    return candidate;
-}
+    float* distances = new float[2 * peps_d];
 
-int EntryPointSelector::get_elvl(int32_t ep_id) const {
-        return hnsw->levels[ep_id] - 1; 
-}
-
-void EntryPointSelector::add(const float* x, int n, int32_t id0) {
-    float* distances = new float[2 * d];
     for (int i = 0; i < n; i++) {
         fill_peps_distances_squared(x + d * i, distances, d);
-        for (int j = 0; j < 2 * d; j++) {
-            if (distances[j] < entry_point_distances[j] &&
-                hnsw->levels[id0 + i] >= hnsw->peps_ep_lvl_low && hnsw->levels[id0+i] <= hnsw->peps_ep_lvl_high) {
-                entry_point_ids[j] = id0 + i;
-                entry_point_distances[j] = distances[j];
+        for (int j = 0; j < 2 * peps_d; j++) {
+            float cur_dis = distances[j];
+            int32_t cur_id = id0 + i;
+            int cur_lvl = levels[cur_id];
+            for (int k = peps_nlvls * j; k < peps_nlvls * j + cur_lvl; k++) {
+                if (peps_ep_ids[k] == -1 || cur_dis < peps_ep_dis[k]) {
+                    peps_ep_dis[k] = cur_dis;
+                    peps_ep_ids[k] = cur_id;
+                }
             }
         }
     }
@@ -105,19 +106,102 @@ void EntryPointSelector::add(const float* x, int n, int32_t id0) {
     delete[] distances;
 }
 
-EntryPointSelector::EntryPointSelector() {}
-
+void HNSW::peps_set_enabled(bool enabled) {
+    if (enabled && !peps_inited) {
+        FAISS_THROW_MSG("peps cannot be enabled before inited");
+    }
+    peps_enabled = enabled;
 }
 
+void HNSW::peps_set_bstats(bool enable, int n) {
+    if(enable) {
+        b_dis_ep.resize(n);
+        b_discomp_layer.resize(n);
+        b_nhops_layer.resize(n);
+    }
+    bstats_enabled = enable;
+}
+
+void HNSW::peps_set_astats(bool enable, int n) {
+    if(enable) {
+        a_time.resize(n);
+        a_dis_layer.resize(n * peps_nlvls);
+    }
+    astats_enabled = enable;
+}
+
+void HNSW::peps_set_ptc(int ptc) {
+    peps_ptc = ptc;
+}
+
+void HNSW::peps_set_lvl_bound(int layer, float bound) {
+    peps_lvl_bounds[layer - 1] = bound;
+}
+
+inline void HNSW::peps_fill_epsearch_bounds(
+        int& start,
+        int& end,
+        int i,
+        float vi) const {
+    start = peps_nlvls * (2 * i + (vi < 0 ? 1 : 0));
+    end = start + peps_nlvls;
+}
+
+float HNSW::peps_get(
+        const float* q,
+        DistanceComputer& qdis,
+        int32_t& ep,
+        int& elvl) const {
+    
+    int32_t candidate_ep = entry_point;
+    int candidate_level = max_level;
+    float candidate_dis = qdis(candidate_ep);
+
+    if(!peps_enabled) {
+        ep = candidate_ep;
+        elvl = candidate_level;
+        return candidate_dis;   
+    }
+
+    int* max_indices = new int[peps_ptc]();
+    get_vec_max_abs_ind(q, peps_d, max_indices, peps_ptc);
+
+    int32_t cur_i{0};
+    float cur_dis{0.0};
+    int start{0}, end{0};
+    int cur_lvl{0};
+
+    for (int i = 0; i < peps_ptc; i++) {
+        cur_i = max_indices[i];
+        peps_fill_epsearch_bounds(start, end, cur_i, q[cur_i]);
+        for (int j = start; j < end; j++) {
+            cur_lvl = j - start;
+            if (peps_ep_ids[j] == -1 || cur_lvl > candidate_level)
+                continue;
+            cur_dis = qdis(peps_ep_ids[j]);
+            if (cur_dis < peps_lvl_bounds[j - start] &&
+                (j - start < candidate_level ||
+                 cur_dis < candidate_dis)) {
+                candidate_dis = cur_dis;
+                candidate_ep = peps_ep_ids[j];
+                candidate_level = j - start;
+            }
+        }
+    }
+
+    delete[] max_indices;
+    ep = candidate_ep;
+    elvl = candidate_level;
+    return candidate_dis;
+}
+
+} // namespace faiss
 
 namespace faiss {
 
 /**************************************************************
  * HNSW structure implementation
  **************************************************************/
-
-
-
 
 int HNSW::nb_neighbors(int layer_no) const {
     FAISS_THROW_IF_NOT(
@@ -1847,8 +1931,13 @@ HNSWStats search_impl(
         VisitedTable& vt,
         const SearchParameters* params,
         // [peps]
-        int32_t qid, const float* v
-        ) {
+        int32_t qid,
+        const float* q) {
+    // [peps]
+    bool bstats_enabled =
+            hnsw.bstats_enabled && qid < hnsw.b_dis_ep.size();
+    bool astats_enabled = hnsw.astats_enabled && qid < hnsw.a_time.size();
+
     HNSWStats stats;
     if (hnsw.entry_point == -1) {
         return stats;
@@ -1865,36 +1954,16 @@ HNSWStats search_impl(
         }
     }
 
-
     //  greedy search on upper levels
     // [peps]
-    bool bstats_enabled = hnsw.bstats_enabled && qid < hnsw.bstats_dis_ep.size();
-    storage_idx_t nearest = hnsw.entry_point;
-    int entry_level = hnsw.max_level;
-    int ep_index;
-    if(hnsw.peps_enabled) {
-        nearest = hnsw.ep_selector.get_ep(v, ep_index);
-        entry_level = hnsw.ep_selector.get_elvl(nearest);
-    }
-
-    float d_nearest = qdis(nearest);
-
-    // [peps]
-    if(bstats_enabled) {
-        hnsw.bstats_dis_ep[qid] = d_nearest;
-        if(hnsw.peps_enabled)
-            hnsw.bstats_dis_pep[qid] = 1.0 - std::abs(v[ep_index]);
-    }
+    storage_idx_t nearest{};
+    int entry_level{};
+    float d_nearest = hnsw.peps_get(q, qdis, nearest, entry_level);
 
     for (int level = entry_level; level >= 1; level--) {
         HNSWStats local_stats = greedy_update_nearest_impl<C>(
                 hnsw, qdis, level, nearest, d_nearest);
         stats.combine(local_stats);
-    }
-
-    // [peps]
-    if(bstats_enabled) {
-        hnsw.bstats_nhops_down[qid] = stats.nhops;
     }
 
     int ef = std::max(cur_efSearch, k);
@@ -1974,11 +2043,7 @@ HNSWStats search_impl(
     }
 
     vt.advance();
-
-    // [peps]
-    if(bstats_enabled) {
-        hnsw.bstats_nhops_bot[qid] = stats.nhops - hnsw.bstats_nhops_down[qid];
-    }
+    
     return stats;
 }
 
@@ -2096,11 +2161,12 @@ HNSWStats HNSW::search(
         ResultHandler& res,
         VisitedTable& vt,
         const SearchParameters* params,
- // [peps]
-        int32_t qid, const float* v
-    ) const {
+        // [peps]
+        int32_t qid,
+        const float* v) const {
     if (is_similarity) {
-        return search_impl<C_similarity>(*this, qdis, index, res, vt, params, qid, v);
+        return search_impl<C_similarity>(
+                *this, qdis, index, res, vt, params, qid, v);
     }
     return search_impl<C_distance>(*this, qdis, index, res, vt, params, qid, v);
 }

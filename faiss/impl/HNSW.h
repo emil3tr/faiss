@@ -22,37 +22,12 @@
 #include <faiss/utils/Heap.h>
 #include <faiss/utils/random.h>
 
+// [peps]
+#include <chrono>
+
 namespace faiss {
 
 struct HNSW;
-
-// [peps]
-struct EntryPointSelector {
-   private:
-    int d = 0;
-    HNSW* hnsw;
-    std::vector<int32_t> entry_point_ids;
-    std::vector<float> entry_point_distances;
-public:
-        EntryPointSelector(int d, HNSW* hsnw);
-        EntryPointSelector();
-        int32_t get_ep(const float* v, int& i) const;
-        int get_elvl(int32_t ep_id) const;
-        void add(const float* x, int n, int32_t id0);
-        ~EntryPointSelector() {}
-};
-
-// [peps]
-struct AdvancedStats {
-        int n_hops_down{0}; // number of hops in the upper layers
-        int n_hops_bottom{0}; // number of hops in the bottom layer
-        int n_distances_computed{0}; // number of distance computations
-        float distance_to_peps_ep{-1.0}; // distance to the peps entry point chosen
-        float distance_to_ep{-1.0}; // distance to the real entry point chosen
-        std::vector<int> level_at_hop{}; // level at hop i
-        std::vector<float> distance_at_hop{}; // distance to query at hop i
-};
-
 
 // Forward declarations to avoid circular dependency.
 struct IndexHNSW;
@@ -91,28 +66,87 @@ struct SearchParametersHNSW : SearchParameters {
 };
 
 struct HNSW {
+    /**
+     * [peps] workflow:
+     * 1) Set IS_PEPS in the IndexHNSWFlat (or use IndexHNSWPeps)
+     * 2) add the vectors to the index by calling add
+     * (IndexHNSW calls peps_init)
+     * 4) toggle on/off with peps_set_enabled, set parameters and stats
+     * collection
+     */
+    bool peps_inited = false;  // all peps vectors inited
+    bool peps_enabled = false; // peps should be used to select entry point
 
-        /**
-         * [peps]
-         * For simple testing we guarantee that if ep_selection_enabled, ep_selector and current_query
-         * are well-inited and if advanced_stats_enabled we cann fill advanced_stats up to its size.
-         */
-        EntryPointSelector ep_selector; 
-        bool peps_inited = false; // peps was inited and all associated vals are valid
-        bool peps_enabled = false; // peps is currently enabled
+    void peps_init(const float* x, int d, int n, int32_t id0);
+    void peps_set_enabled(bool enabled);
 
-        bool bstats_enabled = false;
-        // for simplicity we guarantee that these always have the same size
-        mutable std::vector<int> bstats_nhops_down;
-        mutable std::vector<int> bstats_nhops_bot;
-        mutable std::vector<float> bstats_dis_pep;
-        mutable std::vector<float> bstats_dis_ep;
+    bool bstats_enabled = false; // collect basic stats
+    void peps_set_bstats(bool enable, int n = 0);
+    // for simplicity we guarantee that these always have the same size
+    mutable std::vector<float> b_dis_ep;
+    mutable std::vector<int> b_discomp_layer;
+    mutable std::vector<int> b_nhops_layer;
 
-        int peps_ep_lvl_low = 1;
-        int peps_ep_lvl_high = 100;
-        float peps_use_boundary = 100.0; // use peps if distance to ep is smaller than only
+    void peps_set_astats(bool enable, int n = 0);
+    bool astats_enabled = false; // collect advanced stats
+    mutable std::vector<float> a_dis_layer;
+    mutable std::vector<float> a_time;
 
-        
+    int peps_ptc = 1; // points to check search the best amount peps points for
+                      // entry points
+    void peps_set_ptc(int ptc);
+
+    /*
+     * The size of this vector is peps_nlvls after peps was fully inited.
+     * The entry point chosen will be the one in the lowest layer that satisfies
+     * qdis(p) < peps_lvl_bounds[layer(p)-1]. If we do not find one, we use the
+     * default one.
+     * Inited to 100.0.
+     */
+    std::vector<float> peps_lvl_bounds;
+    /**
+     * Sets the bound for a layer. Assumes the layers are 1-indexed with 1 as
+     * lowest.
+     */
+    void peps_set_lvl_bound(int layer, float bound);
+
+    int peps_d = 0;     // dimension
+    int peps_nlvls = 0; // number of levels
+    /**
+     * Stores the entry point ids. If L is the number of levels and the largest
+     * absolute index is at point i and p = {the entry is negative} we find the
+     * entry point for level 1 at: L*(2*i+p).
+     */
+    std::vector<int32_t> peps_ep_ids;
+    std::vector<float> peps_ep_dis;
+
+#ifndef SWIG
+
+    /**
+     * Sets start and end such that [start, end) contain the possible eps for
+     * the lowest layer upwards. i is the largest index and vi the value at that
+     * index.
+     */
+    inline void peps_fill_epsearch_bounds(
+            int& start,
+            int& end,
+            int i,
+            float vi) const;
+
+    /**
+     * Get the entry point and level for a query vector q.
+     *
+     * @param ep Fills in entry point there.
+     * @param elvl Fills in entry level there (0 indexed).
+     * @return Distance to the entry point.
+     */
+    float peps_get(
+            const float* q,
+            DistanceComputer& qdis,
+            int32_t& ep,
+            int& elvl) const;
+
+#endif
 
     /// internal storage of vectors (32 bits: this is expensive)
     using storage_idx_t = int32_t;
@@ -301,8 +335,8 @@ struct HNSW {
             VisitedTable& vt,
             const SearchParameters* params = nullptr,
             // [peps]
-                int32_t qid = -1, const float* v = nullptr
-        ) const;
+            int32_t qid = -1,
+            const float* v = nullptr) const;
 
     /// search only in level 0 from a given vertex
     void search_level_0(

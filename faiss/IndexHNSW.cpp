@@ -37,46 +37,6 @@
 #include <faiss/utils/sorting.h>
 #include <faiss/utils/utils.h>
 
-// [peps]
-namespace faiss {
-
-void IndexHNSW::peps_init() {
-    hnsw.ep_selector = EntryPointSelector(d, &hnsw);
-    hnsw.peps_inited = true;
-    hnsw.peps_enabled = true;
-}
-
-void IndexHNSW::peps_enable() {
-    hnsw.peps_enabled = true;
-}
-
-void IndexHNSW::peps_disable() {
-    hnsw.peps_enabled = false;
-}
-
-void IndexHNSW::bstats_enable() {
-    hnsw.bstats_enabled = true;
-}
-
-void IndexHNSW::bstats_disable() {
-    hnsw.bstats_enabled = false;
-}
-
-void IndexHNSW::peps_set_lvl_bounds(int low, int high) {
-    if(low > high) return;
-    hnsw.peps_ep_lvl_low = low;
-    hnsw.peps_ep_lvl_high = high;
-}
-
-int IndexHNSW::get_max_level() {
-    return hnsw.max_level + 1;
-}
-
-void IndexHNSW::peps_set_use_boundary(float b) {
-    hnsw.peps_use_boundary = b;
-} // namespace faiss
-
-}
 
 namespace faiss {
 
@@ -559,14 +519,6 @@ void IndexHNSW::search(
         const SearchParameters* params) const {
     FAISS_THROW_IF_NOT(k > 0);
 
-    // [peps]
-    if(hnsw.bstats_enabled) {
-        hnsw.bstats_dis_pep.resize(n);
-        hnsw.bstats_dis_ep.resize(n);
-        hnsw.bstats_nhops_bot.resize(n);
-        hnsw.bstats_nhops_down.resize(n);
-    }
-
     if (is_similarity_metric(this->metric_type)) {
         using RH = HeapBlockResultHandler<HNSW::C_similarity>;
         RH bres(n, distances, labels, k);
@@ -634,9 +586,8 @@ void IndexHNSW::add(idx_t n, const float* x) {
             });
 
     // [peps]
-    if(hnsw.peps_inited) {
-        hnsw.ep_selector.add(x, n, n0);
-    }
+    if(IS_PEPS)
+        hnsw.peps_init(x, d, n, n0);
 }
 
 void IndexHNSW::reset() {
