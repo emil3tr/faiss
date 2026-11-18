@@ -81,9 +81,8 @@ void HNSW::peps_init(const float* x, int d, int n, int32_t id0) {
         peps_nlvls = max_level + 1;
         peps_ep_ids = std::vector<int32_t>(peps_d * 2 * peps_nlvls, -1);
         peps_ep_dis = std::vector<float>(peps_d * 2 * peps_nlvls, 0.0);
-        peps_lvl_bounds = std::vector<float>(peps_nlvls, 100.0);
-        peps_inited =
-                true;
+        peps_lvl_bounds = std::vector<float>(peps_nlvls, 0.0);
+        peps_inited = true;
     }
 
     float* distances = new float[2 * peps_d];
@@ -114,18 +113,19 @@ void HNSW::peps_set_enabled(bool enabled) {
 }
 
 void HNSW::peps_set_bstats(bool enable, int n) {
-    if(enable) {
+    if (enable && n > 0) {
         b_dis_ep.resize(n);
-        b_discomp_layer.resize(n);
-        b_nhops_layer.resize(n);
+        b_discomp_layer.resize(n * peps_nlvls);
+        b_nhops_layer.resize(n * peps_nlvls);
+        b_dis_layer.resize(n * peps_nlvls);
     }
     bstats_enabled = enable;
 }
 
 void HNSW::peps_set_astats(bool enable, int n) {
-    if(enable) {
+    if (enable && n > 0) {
         a_time.resize(n);
-        a_dis_layer.resize(n * peps_nlvls);
+        a_peps_time.resize(n);
     }
     astats_enabled = enable;
 }
@@ -136,6 +136,13 @@ void HNSW::peps_set_ptc(int ptc) {
 
 void HNSW::peps_set_lvl_bound(int layer, float bound) {
     peps_lvl_bounds[layer - 1] = bound;
+}
+
+void HNSW::peps_set_lvl_bound4(float b1, float b2, float b3, float b4) {
+    peps_lvl_bounds[0] = b1;
+    peps_lvl_bounds[1] = b2;
+    peps_lvl_bounds[2] = b3;
+    peps_lvl_bounds[3] = b4;
 }
 
 inline void HNSW::peps_fill_epsearch_bounds(
@@ -152,15 +159,14 @@ float HNSW::peps_get(
         DistanceComputer& qdis,
         int32_t& ep,
         int& elvl) const {
-    
     int32_t candidate_ep = entry_point;
     int candidate_level = max_level;
     float candidate_dis = qdis(candidate_ep);
 
-    if(!peps_enabled) {
+    if (!peps_enabled) {
         ep = candidate_ep;
         elvl = candidate_level;
-        return candidate_dis;   
+        return candidate_dis;
     }
 
     int* max_indices = new int[peps_ptc]();
@@ -180,8 +186,7 @@ float HNSW::peps_get(
                 continue;
             cur_dis = qdis(peps_ep_ids[j]);
             if (cur_dis < peps_lvl_bounds[j - start] &&
-                (j - start < candidate_level ||
-                 cur_dis < candidate_dis)) {
+                (j - start < candidate_level || cur_dis < candidate_dis)) {
                 candidate_dis = cur_dis;
                 candidate_ep = peps_ep_ids[j];
                 candidate_level = j - start;
@@ -1934,9 +1939,13 @@ HNSWStats search_impl(
         int32_t qid,
         const float* q) {
     // [peps]
-    bool bstats_enabled =
-            hnsw.bstats_enabled && qid < hnsw.b_dis_ep.size();
+    bool bstats_enabled = hnsw.bstats_enabled && qid < hnsw.b_dis_ep.size();
     bool astats_enabled = hnsw.astats_enabled && qid < hnsw.a_time.size();
+    std::chrono::time_point<std::chrono::steady_clock> start_time,
+            peps_start_time;
+    if (astats_enabled) {
+        start_time = std::chrono::steady_clock::now();
+    }
 
     HNSWStats stats;
     if (hnsw.entry_point == -1) {
@@ -1956,14 +1965,48 @@ HNSWStats search_impl(
 
     //  greedy search on upper levels
     // [peps]
+    if (astats_enabled) {
+        peps_start_time = std::chrono::steady_clock::now();
+    }
     storage_idx_t nearest{};
     int entry_level{};
     float d_nearest = hnsw.peps_get(q, qdis, nearest, entry_level);
+    if (astats_enabled) {
+        std::chrono::duration<double, std::milli> dur =
+                std::chrono::steady_clock::now() - peps_start_time;
+        hnsw.a_peps_time[qid] = dur.count();
+    }
+
+    // [peps]
+    if (bstats_enabled) {
+        hnsw.b_dis_ep[qid] = d_nearest;
+        for (int i = entry_level + 1; i < hnsw.peps_nlvls; i++) {
+            hnsw.b_discomp_layer[qid*hnsw.peps_nlvls + i] = -1;
+            hnsw.b_nhops_layer[qid*hnsw.peps_nlvls + i] = -1;
+            hnsw.b_dis_layer[qid*hnsw.peps_nlvls + i] = -1;
+        }
+    }
 
     for (int level = entry_level; level >= 1; level--) {
+        // [peps]
+        if (bstats_enabled) {
+            hnsw.b_dis_layer[qid*hnsw.peps_nlvls + level] = d_nearest;
+        }
         HNSWStats local_stats = greedy_update_nearest_impl<C>(
                 hnsw, qdis, level, nearest, d_nearest);
         stats.combine(local_stats);
+        // [peps]
+        if (bstats_enabled) {
+            hnsw.b_discomp_layer[qid*hnsw.peps_nlvls + level] = local_stats.ndis;
+            hnsw.b_nhops_layer[qid*hnsw.peps_nlvls + level] = local_stats.nhops;
+        }
+    }
+
+    // [peps]
+    if (bstats_enabled) {
+        hnsw.b_discomp_layer[qid*hnsw.peps_nlvls] = stats.ndis;
+        hnsw.b_nhops_layer[qid*hnsw.peps_nlvls] = stats.nhops;
+        hnsw.b_dis_layer[qid*hnsw.peps_nlvls] = d_nearest;
     }
 
     int ef = std::max(cur_efSearch, k);
@@ -2043,7 +2086,17 @@ HNSWStats search_impl(
     }
 
     vt.advance();
-    
+
+    // [peps]
+    if (bstats_enabled) {
+        hnsw.b_discomp_layer[qid*hnsw.peps_nlvls] = stats.ndis - hnsw.b_discomp_layer[qid*hnsw.peps_nlvls];
+        hnsw.b_nhops_layer[qid*hnsw.peps_nlvls] = stats.nhops - hnsw.b_nhops_layer[qid*hnsw.peps_nlvls];
+    }
+    if (astats_enabled) {
+        std::chrono::duration<double, std::milli> dur =
+                std::chrono::steady_clock::now() - start_time;
+        hnsw.a_time[qid] = dur.count();
+    }
     return stats;
 }
 

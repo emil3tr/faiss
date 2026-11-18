@@ -81,16 +81,17 @@ struct HNSW {
     void peps_set_enabled(bool enabled);
 
     bool bstats_enabled = false; // collect basic stats
-    void peps_set_bstats(bool enable, int n = 0);
+    void peps_set_bstats(bool enable, int n = -1);
     // for simplicity we guarantee that these always have the same size
     mutable std::vector<float> b_dis_ep;
     mutable std::vector<int> b_discomp_layer;
     mutable std::vector<int> b_nhops_layer;
+    mutable std::vector<float> b_dis_layer;
 
-    void peps_set_astats(bool enable, int n = 0);
     bool astats_enabled = false; // collect advanced stats
-    mutable std::vector<float> a_dis_layer;
-    mutable std::vector<float> a_time;
+    void peps_set_astats(bool enable, int n = -1);
+    mutable std::vector<double> a_time;
+    mutable std::vector<double> a_peps_time;
 
     int peps_ptc = 1; // points to check search the best amount peps points for
                       // entry points
@@ -101,7 +102,7 @@ struct HNSW {
      * The entry point chosen will be the one in the lowest layer that satisfies
      * qdis(p) < peps_lvl_bounds[layer(p)-1]. If we do not find one, we use the
      * default one.
-     * Inited to 100.0.
+     * Inited to 0.0.
      */
     std::vector<float> peps_lvl_bounds;
     /**
@@ -109,6 +110,7 @@ struct HNSW {
      * lowest.
      */
     void peps_set_lvl_bound(int layer, float bound);
+    void peps_set_lvl_bound4(float b1, float b2, float b3, float b4);
 
     int peps_d = 0;     // dimension
     int peps_nlvls = 0; // number of levels
